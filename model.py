@@ -42,6 +42,8 @@ class VariationalRecurrentNeuralNetwork(nn.Module):
             self,
             input_size=28,
             latent_size=32,
+            num_classes=32,
+            gumbel_temperature=1.0,
             hidden_size=256,
             prior=False
         ):
@@ -50,6 +52,8 @@ class VariationalRecurrentNeuralNetwork(nn.Module):
 
         self.input_size = input_size
         self.latent_size = latent_size
+        self.num_classes = num_classes
+        self.gumbel_temperature = gumbel_temperature
         self.hidden_size = hidden_size
 
         self.epsilon = torch.finfo(torch.float).eps
@@ -65,13 +69,13 @@ class VariationalRecurrentNeuralNetwork(nn.Module):
         self.encoder = nn.Sequential(
             nn.Linear(hidden_size + hidden_size, hidden_size), nn.ELU(),
             nn.Linear(hidden_size, hidden_size), nn.ELU(),
-            nn.Linear(hidden_size, 2 * latent_size),
-            Split(latent_size, m2=nn.Softplus()),
+            nn.Linear(hidden_size, latent_size * num_classes),
+            Reshape(-1, latent_size, num_classes),
         )
 
         # Decoder
         self.decoder = nn.Sequential(
-            nn.Linear(latent_size + hidden_size, hidden_size), nn.ELU(),
+            nn.Linear(latent_size * num_classes + hidden_size, hidden_size), nn.ELU(),
             nn.Linear(hidden_size, hidden_size), nn.ELU(),
             nn.Linear(hidden_size, input_size),
         )
@@ -80,14 +84,17 @@ class VariationalRecurrentNeuralNetwork(nn.Module):
         if prior:
             self.prior = nn.Sequential(
                 nn.Linear(hidden_size, hidden_size), nn.ELU(),
-                nn.Linear(hidden_size, 2 * latent_size),
-                Split(latent_size, m2=nn.Softplus()),
+                nn.Linear(hidden_size, latent_size * num_classes),
+                Reshape(-1, latent_size, num_classes)
             )
         else:
             self.prior = None
 
         # Recurrence
-        self.rnn = nn.GRU(latent_size, hidden_size, num_layers=1, batch_first=True)
+        self.rnn = nn.GRU(
+            latent_size * num_classes, hidden_size,
+            num_layers=1, batch_first=True,
+        )
 
     def forward(self, x):
 
@@ -104,23 +111,25 @@ class VariationalRecurrentNeuralNetwork(nn.Module):
 
             # Prior
             if self.prior is None:
-                mu_p = torch.zeros(batch_size, self.latent_size, device=x.device)
-                sigma_p = torch.ones(batch_size, self.latent_size, device=x.device)
+                logits_p = torch.ones(batch_size, self.latent_size, self.num_classes, device=x.device)
             else:
-                mu_p, sigma_p = self.prior(h)
-            prior_dist = dist.Normal(mu_p, sigma_p)
-            detached_prior_dist = dist.Normal(mu_p.detach(), sigma_p.detach())
+                logits_p = self.prior(h)
+            prior_dist = dist.Categorical(logits=logits_p)
+            detached_prior_dist = dist.Categorical(logits=logits_p.detach())
 
             # Current input
             xx = self.x_feature(x[:, t, :])
 
             # Encoder
-            mu_e, sigma_e = self.encoder(torch.cat((xx, h), dim=-1))
-            latent_dist = dist.Normal(mu_e, sigma_e)
-            detached_latent_dist = dist.Normal(mu_e.detach(), sigma_e.detach())
+            logits_e = self.encoder(torch.cat((xx, h), dim=-1))
+            latent_dist = dist.Categorical(logits=logits_e)
+            detached_latent_dist = dist.Categorical(logits=logits_e.detach())
 
             # Sample latent (with Gumbel reparametrization trick)
-            z = latent_dist.rsample()
+            z = func.one_hot(latent_dist.sample(), num_classes=self.num_classes).float()
+            probs = func.softmax(latent_dist.logits / self.gumbel_temperature, dim=-1)
+            z = z + probs - probs.detach()
+            z = z.view(-1, self.latent_size * self.num_classes)
 
             # Decoder
             mu_d = self.decoder(torch.cat((z, h), dim=-1))
@@ -156,15 +165,14 @@ class VariationalRecurrentNeuralNetwork(nn.Module):
 
                 # Prior
                 if self.prior is None:
-                    mu_p = torch.zeros(batch_size, self.latent_size, device=device)
-                    sigma_p = torch.ones(batch_size, self.latent_size, device=device)
+                    logits_p = torch.ones(batch_size, self.latent_size, self.num_classes, device=device)
                 else:
-                    mu_p, sigma_p = self.prior(h)
-
-                prior_dist = dist.Normal(mu_p, sigma_p)
+                    logits_p = self.prior(h)
+                prior_dist = dist.Categorical(logits=logits_p)
 
                 # Sample latent
-                z = prior_dist.sample()
+                z = func.one_hot(prior_dist.sample(), num_classes=self.num_classes).float()
+                z = z.view(-1, self.latent_size * self.num_classes)
 
                 # Decoder
                 mu_d = self.decoder(torch.cat((z, h), dim=-1))

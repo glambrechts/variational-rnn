@@ -17,6 +17,8 @@ def main(args):
     vrnn = VariationalRecurrentNeuralNetwork(
         input_size=28,
         latent_size=args.latent_size,
+        num_classes=args.num_classes,
+        gumbel_temperature=args.gumbel_temperature,
         hidden_size=args.hidden_size,
         prior=not args.no_prior,
     ).to(device)
@@ -40,6 +42,8 @@ if __name__ == '__main__':
     parser.add_argument('run_id')
 
     parser.add_argument('-Z', '--latent_size', type=int, default=32)
+    parser.add_argument('-L', '--num_classes', type=int, default=32)
+    parser.add_argument('-G', '--gumbel_temperature', type=float, default=1.0)
     parser.add_argument('-H', '--hidden_size', type=int, default=1024)
 
     parser.add_argument('-R', '--prior_weight', type=float, default=0.5)

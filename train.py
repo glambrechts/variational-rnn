@@ -1,6 +1,5 @@
 import os
 import wandb
-
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -34,6 +33,8 @@ def main(args):
     vrnn = VariationalRecurrentNeuralNetwork(
         input_size=train_images.size(-1),
         latent_size=config.latent_size,
+        num_classes=config.num_classes,
+        gumbel_temperature=config.gumbel_temperature,
         hidden_size=config.hidden_size,
         prior=not config.no_prior,
     ).to(device)
@@ -121,6 +122,8 @@ if __name__ == '__main__':
     parser.add_argument('-n', '--no_log', action='store_true')
 
     parser.add_argument('-Z', '--latent_size', type=int, default=32)
+    parser.add_argument('-L', '--num_classes', type=int, default=32)
+    parser.add_argument('-G', '--gumbel_temperature', type=float, default=1.0)
     parser.add_argument('-H', '--hidden_size', type=int, default=1024)
 
     parser.add_argument('-R', '--prior_weight', type=float, default=0.5)
